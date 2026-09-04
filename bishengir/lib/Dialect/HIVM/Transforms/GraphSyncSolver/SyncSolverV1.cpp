@@ -366,6 +366,13 @@ SyncSolverV1::getIntersectingEventIdNodes(ConflictPair *conflictPair) {
       }
     }
   }
+  for (auto &curConflictPair : userEventIdReservationPairs) {
+    if (!intersectingNodes.contains(curConflictPair->eventIdNode)) {
+      if (checkIntersect(conflictPair, curConflictPair.get())) {
+        intersectingNodes.insert(curConflictPair->eventIdNode);
+      }
+    }
+  }
   return intersectingNodes.takeVector();
 }
 

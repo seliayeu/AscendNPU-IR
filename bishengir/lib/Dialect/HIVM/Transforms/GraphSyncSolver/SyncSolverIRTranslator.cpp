@@ -54,6 +54,51 @@
 using namespace mlir;
 using namespace hivm::syncsolver;
 
+std::optional<int64_t> IRTranslator::getUserSyncGroupId(Operation *op) {
+  assert(op != nullptr);
+
+  constexpr llvm::StringLiteral kDeduceFlagIdAttr(
+      "hivm.gss_deduce_flag_id");
+  Attribute attr = op->getAttr(kDeduceFlagIdAttr);
+  if (!attr) {
+    return std::nullopt;
+  }
+
+  auto intAttr = dyn_cast<IntegerAttr>(attr);
+  assert(intAttr && "expected integer hivm.gss_deduce_flag_id attribute");
+
+  int64_t userSyncGroupId = intAttr.getInt();
+  assert(userSyncGroupId >= 0 &&
+         "expected non-negative hivm.gss_deduce_flag_id");
+  return userSyncGroupId;
+}
+
+void IRTranslator::validateUserSyncPairs() {
+  auto isConcreteCrossCoreType = [](hivm::TCoreType coreType) {
+    return coreType == hivm::TCoreType::CUBE ||
+           coreType == hivm::TCoreType::VECTOR;
+  };
+
+  for (auto &[userSyncGroupId, groupOps] : userSyncGroupOps) {
+    (void)userSyncGroupId;
+    auto *setOp = groupOps.first;
+    auto *waitOp = groupOps.second;
+
+    assert(setOp && "missing sync_block_set for user sync group");
+    assert(waitOp && "missing sync_block_wait for user sync group");
+    assert(setOp->pipeSrc == waitOp->pipeSrc &&
+           "user sync set/wait source pipe mismatch");
+    assert(setOp->pipeDst == waitOp->pipeDst &&
+           "user sync set/wait destination pipe mismatch");
+    assert(isConcreteCrossCoreType(setOp->coreType) &&
+           "user sync set core type must be CUBE or VECTOR");
+    assert(isConcreteCrossCoreType(waitOp->coreType) &&
+           "user sync wait core type must be CUBE or VECTOR");
+    assert(setOp->coreType != waitOp->coreType &&
+           "user sync set/wait core types must be different");
+  }
+}
+
 // Resolve a Value into the underlying pointer-like Values used for memory
 // conflict analysis (handles block args, selects, scf::If, scf::For/While
 // results etc.).
@@ -595,6 +640,45 @@ IRTranslator::translateRWLikeOp(Operation *op, OperationBase *parentOp) {
 }
 
 std::unique_ptr<OperationBase>
+IRTranslator::buildUserSetFlagOp(hivm::SyncBlockSetOp op,
+                                 OperationBase *parentOp,
+                                 int64_t userSyncGroupId) {
+  auto pipeSrc = op.getTpipeAttr().getPipe();
+  auto pipeDst = op.getPipeAttr().getPipe();
+  auto flagOp = std::make_unique<SetFlagOp>(op.getOperation(), parentOp,
+                                            llvm::SmallVector<int64_t>{},
+                                            pipeSrc, pipeDst);
+  auto coreType = op.getTcoreTypeAttr().getTcoretype();
+  flagOp->coreType = coreType;
+
+  assert(!userSyncGroupOps.contains(userSyncGroupId) &&
+         "duplicate sync_block_set or wait-before-set in user sync group");
+  userSyncGroupOps[userSyncGroupId] = {flagOp.get(), nullptr};
+
+  return flagOp;
+}
+
+std::unique_ptr<OperationBase>
+IRTranslator::buildUserWaitFlagOp(hivm::SyncBlockWaitOp op,
+                                  OperationBase *parentOp,
+                                  int64_t userSyncGroupId) {
+  auto pipeSrc = op.getTpipeAttr().getPipe();
+  auto pipeDst = op.getPipeAttr().getPipe();
+  auto flagOp = std::make_unique<WaitFlagOp>(op.getOperation(), parentOp,
+                                             llvm::SmallVector<int64_t>{},
+                                             pipeSrc, pipeDst);
+  auto coreType = op.getTcoreTypeAttr().getTcoretype();
+  flagOp->coreType = coreType;
+
+  assert(userSyncGroupOps.contains(userSyncGroupId) &&
+         userSyncGroupOps[userSyncGroupId].second == nullptr &&
+         "missing/duplicate sync_block_wait in user sync group");
+  userSyncGroupOps[userSyncGroupId].second = flagOp.get();
+
+  return flagOp;
+}
+
+std::unique_ptr<OperationBase>
 IRTranslator::getTensorExtractOp(tensor::ExtractOp extractOp,
                                  OperationBase *parentOp) {
   auto pipeRead = hivm::PIPE::PIPE_S;
@@ -905,6 +989,32 @@ std::unique_ptr<Scope> IRTranslator::funcIrBuilder(Region &region,
         auto anchor = std::make_unique<Anchor>(&op, parScope, anchorOp.getId());
         anchorOpMap[anchor->anchorId] = anchor.get();
         parScope->body.push_back(std::move(anchor));
+        continue;
+      }
+      if (auto syncBlockSetOp = dyn_cast<hivm::SyncBlockSetOp>(op)) {
+        if (auto userSyncGroupId =
+                getUserSyncGroupId(syncBlockSetOp.getOperation())) {
+          assert(syncBlockSetOp.getDynamicFlagId() ==
+                     TypedValue<IntegerType>{} &&
+                 "deduced user syncs do not support dynamic flag operands");
+          if (auto flagOp = buildUserSetFlagOp(syncBlockSetOp, parScope,
+                                               *userSyncGroupId)) {
+            parScope->body.push_back(std::move(flagOp));
+          }
+        }
+        continue;
+      }
+      if (auto syncBlockWaitOp = dyn_cast<hivm::SyncBlockWaitOp>(op)) {
+        if (auto userSyncGroupId =
+                getUserSyncGroupId(syncBlockWaitOp.getOperation())) {
+          assert(syncBlockWaitOp.getDynamicFlagId() ==
+                     TypedValue<IntegerType>{} &&
+                 "deduced user syncs do not support dynamic flag operands");
+          if (auto flagOp = buildUserWaitFlagOp(syncBlockWaitOp, parScope,
+                                                *userSyncGroupId)) {
+            parScope->body.push_back(std::move(flagOp));
+          }
+        }
         continue;
       }
       if (auto rwOp = translateRWLikeOp(&op, parScope)) {

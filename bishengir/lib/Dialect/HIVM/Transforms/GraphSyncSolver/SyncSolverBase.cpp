@@ -84,6 +84,8 @@ void SyncSolverBase::reset(bool resetEventIdRanOutOpts) {
   chosenConflictedPairs.clear();
   erasedChosenConflictedPairs.clear();
   erasedPersistentChosenConflictedPairs.clear();
+  userEventIdReservationPairs.clear();
+  userSyncGroupEventIdNodes.clear();
   scopeOccChosenConflicts.clear();
   scopeOccPairChosenConflicts.clear();
   tempInsertedConflictPairs.clear();
@@ -495,6 +497,11 @@ bool SyncSolverBase::checkIntersect(ConflictPair *conflictPair1,
   if (conflictPair1->dontCheckForConflict ||
       conflictPair2->dontCheckForConflict) {
     return false;
+  }
+  if (conflictPair1->eventIdReservationOnly ||
+      conflictPair2->eventIdReservationOnly) {
+    return conflictPair1->endIndex >= conflictPair2->startIndex &&
+           conflictPair2->endIndex >= conflictPair1->startIndex;
   }
   if (options.isIntraCoreMode()) {
     return checkIntraCoreIntersect(conflictPair1, conflictPair2);
@@ -2829,6 +2836,82 @@ void SyncSolverBase::insertMergedBackwardSyncPairs() {
   }
 }
 
+void SyncSolverBase::insertUserSyncEventIdReservations() {
+  for (auto &[userSyncGroupId, groupOps] : userSyncGroupOps) {
+    auto *setFlagOp = groupOps.first;
+    auto *waitFlagOp = groupOps.second;
+
+    auto &setOccs = opAllOccurrences[setFlagOp];
+    auto &waitOccs = opAllOccurrences[waitFlagOp];
+
+    assert(setOccs.size() == waitOccs.size());
+
+    for (int i = 0; i < static_cast<int>(setOccs.size()); ++i) {
+      auto reservationStart = setOccs[i]->endIndex;
+      auto reservationEnd = waitOccs[i]->startIndex;
+      assert(reservationStart < reservationEnd);
+
+      CorePipeInfo setCorePipeInfo = {setFlagOp->coreType,
+                                      setFlagOp->pipeSrc};
+      CorePipeInfo waitCorePipeInfo = {waitFlagOp->coreType,
+                                       waitFlagOp->pipeDst};
+      auto reservationPair = std::make_unique<ConflictPair>(
+          nullptr, nullptr, setFlagOp, waitFlagOp, setOccs[i], waitOccs[i],
+          setCorePipeInfo, waitCorePipeInfo, reservationStart,
+          reservationEnd);
+      reservationPair->eventIdReservationOnly = true;
+      reservationPair->isUseless = true;
+      reservationPair->dontReuse = true;
+      reservationPair->dontCheckForConflict = false;
+      reservationPair->couldNotRun = true;
+      reservationPair->eventIdInfo = EventIdInfo(1);
+
+      auto &curEventIdSolver = getEventIdSolverRef(
+          reservationPair->setCorePipeInfo.pipe,
+          reservationPair->waitCorePipeInfo.pipe);
+      curEventIdSolver->pushActionNone();
+
+      if (userSyncGroupEventIdNodes.contains(userSyncGroupId)) {
+        reservationPair->eventIdNode =
+            userSyncGroupEventIdNodes[userSyncGroupId];
+        curEventIdSolver->insertConflictPair(
+            userSyncGroupEventIdNodes[userSyncGroupId], reservationPair.get());
+      } else {
+        userSyncGroupEventIdNodes[userSyncGroupId] =
+            curEventIdSolver->createNode(
+                reservationPair.get(), reservationPair->eventIdInfo.eventIdNum,
+                false);
+        reservationPair->eventIdNode =
+            userSyncGroupEventIdNodes[userSyncGroupId];
+      }
+
+      auto intersectingEventIdNodes =
+          getIntersectingEventIdNodes(reservationPair.get());
+      curEventIdSolver->addConflicts(reservationPair->eventIdNode,
+                               intersectingEventIdNodes);
+      assert(curEventIdSolver->isColorable());
+      userEventIdReservationPairs.push_back(std::move(reservationPair));
+      curEventIdSolver->clearActionStack();
+    }
+  }
+}
+
+
+llvm::SmallVector<std::pair<Operation *, int64_t>>
+SyncSolverBase::getUserSyncFlagIdRewrites() {
+  llvm::SmallVector<std::pair<Operation *, int64_t>> rewrites;
+  for (auto &[userSyncGroupId, eventNode] : userSyncGroupEventIdNodes) {
+    auto ids = eventNode->getEventIds();
+    assert(ids.size() == 1);
+    auto flagId = ids.front();
+    auto groupOps = userSyncGroupOps[userSyncGroupId];
+    rewrites.push_back({groupOps.first->op, flagId});
+    rewrites.push_back({groupOps.second->op, flagId});
+  }
+
+  return rewrites;
+}
+
 llvm::LogicalResult SyncSolverBase::considerOuterBackwardSyncPairs() {
   if (!options.considerOuterBackwardSyncPairs) {
     return llvm::failure();
@@ -2965,6 +3048,7 @@ llvm::LogicalResult SyncSolverBase::runSolver(bool enableOpts1,
 
     reset();
     insertMergedBackwardSyncPairs();
+    insertUserSyncEventIdReservations();
     processOrders();
 
     if (llvm::succeeded(tryMovingOutBackwardSyncPairsToOuterLoops())) {
@@ -3007,6 +3091,7 @@ llvm::LogicalResult SyncSolverBase::runSolver(bool enableOpts1,
 
   reset();
   insertMergedBackwardSyncPairs();
+  insertUserSyncEventIdReservations();
   processOrders();
 
   return llvm::success(runNum < maxRunNum);

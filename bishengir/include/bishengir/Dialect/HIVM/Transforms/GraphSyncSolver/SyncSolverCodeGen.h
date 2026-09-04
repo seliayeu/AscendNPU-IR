@@ -84,6 +84,10 @@ private:
 
   CustomMacroSyncCodegenState customMacroCodegen;
 
+  // Existing user-authored sync ops paired with the solver-assigned flag id to
+  // write back into their static_flag_id attribute.
+  llvm::SmallVector<std::pair<Operation *, int64_t>> userSyncFlagIdRewrites;
+
 public:
   CodeGenerator(const SyncSolverOptions &options) : options(options) {}
 
@@ -96,6 +100,7 @@ public:
     auto [syncBefore, syncAfter] = solver->getBeforeAfterSyncMaps();
     syncMapBefore = std::move(syncBefore);
     syncMapAfter = std::move(syncAfter);
+    userSyncFlagIdRewrites = solver->getUserSyncFlagIdRewrites();
     funcOp = solver->funcOp;
     funcIr = std::move(solver->funcIr);
     syncIr = std::move(solver->syncIr);
@@ -109,6 +114,9 @@ public:
 
   // Insert sync ops into actual MLIR IR using rewriter.
   void generateResultOps();
+
+  // Rewrite existing deduced user sync ops with solver-assigned flag IDs.
+  void applyUserSyncFlagIdRewrites();
 
 private:
   // Location/IR insertion helpers and event id value creation.

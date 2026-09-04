@@ -100,6 +100,17 @@ public:
     }
   } perfInfo;
 
+  // Reservation-only conflict pairs created from user-authored sync ops. These
+  // participate in event-id coloring but are not emitted by codegen.
+  std::vector<std::unique_ptr<ConflictPair>> userEventIdReservationPairs;
+
+  // Logical user group id -> translated solver set/wait ops.
+  llvm::DenseMap<int64_t, std::pair<SetFlagOp *, WaitFlagOp *>>
+      userSyncGroupOps;
+
+  // Logical user group id -> shared event-id coloring node.
+  llvm::DenseMap<int64_t, EventIdNode *> userSyncGroupEventIdNodes;
+
 protected:
   // Codegen walk counter used when indexing set/wait ops.
   int64_t globalSetWaitIndex{0};
@@ -216,6 +227,10 @@ public:
   // Build SyncBeforeAfterMap (SyncMap before/after) from chosen ConflictPairs.
   SyncBeforeAfterMap getBeforeAfterSyncMaps();
 
+  // Return existing user-authored sync ops paired with their assigned flag IDs.
+  llvm::SmallVector<std::pair<Operation *, int64_t>>
+  getUserSyncFlagIdRewrites();
+
 protected:
   // Clear per-pass bookkeeping (optionally also state used after EventIdSolver
   // runs out of ids).
@@ -250,6 +265,7 @@ protected:
     unitFlagFeaturedOps = std::move(irTranslator->unitFlagFeaturedOps);
     opAllOccurrences = std::move(irTranslator->opAllOccurrences);
     customMacroSync.collectReservedEventIds(funcOp, options);
+    userSyncGroupOps = std::move(irTranslator->userSyncGroupOps);
   }
 
   // Clear unit-flag bookkeeping on RW ops / occurrences.
@@ -570,6 +586,8 @@ protected:
 
   // Re-insert ConflictPairs for previously merged backward sync operations.
   void insertMergedBackwardSyncPairs();
+
+  void insertUserSyncEventIdReservations();
 
   // Hoist eligible backward sync operations to an outer scope.
   llvm::LogicalResult considerOuterBackwardSyncPairs();

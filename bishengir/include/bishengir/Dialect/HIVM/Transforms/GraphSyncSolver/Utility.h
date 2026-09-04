@@ -400,6 +400,7 @@ struct ConflictPair {
   bool movedToOuterLoop{false};
   bool isPersistent{false};
   bool isErased{false};
+  bool eventIdReservationOnly{false};
 
   ConflictPair(RWOperation *op1, RWOperation *op2, OperationBase *setOp,
                OperationBase *waitOp, Occurrence *setOcc, Occurrence *waitOcc,
@@ -459,6 +460,8 @@ struct ConflictPair {
     clonedConflictPair->movedToOuterLoop = movedToOuterLoop;
     clonedConflictPair->isPersistent = isPersistent;
     clonedConflictPair->isErased = isErased;
+    clonedConflictPair->eventIdReservationOnly = eventIdReservationOnly;
+
     return clonedConflictPair;
   }
 
