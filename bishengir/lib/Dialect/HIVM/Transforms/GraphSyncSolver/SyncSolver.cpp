@@ -60,6 +60,8 @@ void Solver::reset(bool resetEventIdRanOutOpts) {
   syncedPairs.clear();
   processedOccPairs.clear();
   chosenConflictedPairs.clear();
+  userEventIdReservationPairs.clear();
+  userSyncGroupEventIdNodes.clear();
   scopeOccChosenConflicts.clear();
   scopeOccPairChosenConflicts.clear();
   backwardSyncEvents.clear();
@@ -791,6 +793,17 @@ bool Solver::checkIntersect(ConflictPair *conflictPair1,
       conflictPair2->dontCheckForConflict) {
     return false;
   }
+  if (conflictPair1->eventIdReservationOnly ||
+      conflictPair2->eventIdReservationOnly) {
+    for (auto [l1, r1] : getRanges(conflictPair1)) {
+      for (auto [l2, r2] : getRanges(conflictPair2)) {
+        if (checkRangesIntersect(l1, r1 + 1, l2, r2 + 1)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
   if (options.isCrossCoreMode()) {
     return checkSyncOpsConflicts(conflictPair1, conflictPair2);
   }
@@ -829,6 +842,12 @@ Solver::getIntersectingConflictPairs(ConflictPair *conflictPair) {
       intersectingConflictPairs.push_back(curConflictPair.get());
     }
   }
+  for (auto &curConflictPair : userEventIdReservationPairs) {
+    if (checkIntersect(conflictPair, curConflictPair.get())) {
+      intersectingConflictPairs.push_back(curConflictPair.get());
+    }
+  }
+
   return intersectingConflictPairs;
 }
 
@@ -2442,6 +2461,81 @@ void Solver::insertMergedBackwardSyncPairs() {
   }
 }
 
+void Solver::insertUserSyncEventIdReservations() {
+  for (auto &[userSyncGroupId, groupOps] : userSyncGroupOps) {
+    auto *setFlagOp = groupOps.first;
+    auto *waitFlagOp = groupOps.second;
+
+    auto &setOccs = opAllOccurrences[setFlagOp];
+    auto &waitOccs = opAllOccurrences[waitFlagOp];
+
+    assert(setOccs.size() == waitOccs.size());
+
+    for (int i = 0; i < static_cast<int>(setOccs.size()); ++i) {
+      auto reservationStart = setOccs[i]->endIndex;
+      auto reservationEnd = waitOccs[i]->startIndex;
+      assert(reservationStart < reservationEnd);
+
+      CorePipeInfo setCorePipeInfo = {setFlagOp->coreType,
+                                      setFlagOp->pipeSrc};
+      CorePipeInfo waitCorePipeInfo = {waitFlagOp->coreType,
+                                       waitFlagOp->pipeDst};
+      auto reservationPair = std::make_unique<ConflictPair>(
+          nullptr, nullptr, setFlagOp, waitFlagOp, setOccs[i], waitOccs[i],
+          setCorePipeInfo, waitCorePipeInfo, reservationStart,
+          reservationEnd);
+      reservationPair->eventIdReservationOnly = true;
+      reservationPair->isUseless = true;
+      reservationPair->dontReuse = true;
+      reservationPair->dontCheckForConflict = false;
+      reservationPair->couldNotRun = true;
+      reservationPair->eventIdInfo = EventIdInfo(1);
+
+      auto &curEventIdSolver = getEventIdSolverRef(
+          reservationPair->setCorePipeInfo.pipe,
+          reservationPair->waitCorePipeInfo.pipe);
+      curEventIdSolver->pushActionNone();
+
+      if (userSyncGroupEventIdNodes.contains(userSyncGroupId)) {
+        reservationPair->eventIdNode =
+            userSyncGroupEventIdNodes[userSyncGroupId];
+        curEventIdSolver->insertConflictPair(
+            userSyncGroupEventIdNodes[userSyncGroupId], reservationPair.get());
+      } else {
+        userSyncGroupEventIdNodes[userSyncGroupId] =
+            curEventIdSolver->createNode(
+                reservationPair.get(), reservationPair->eventIdInfo.eventIdNum,
+                false);
+        reservationPair->eventIdNode =
+            userSyncGroupEventIdNodes[userSyncGroupId];
+      }
+
+      auto intersectingConflictPairs =
+          getIntersectingConflictPairs(reservationPair.get());
+      curEventIdSolver->addConflicts(reservationPair.get(),
+                                     intersectingConflictPairs);
+      assert(curEventIdSolver->isColorable());
+      userEventIdReservationPairs.push_back(std::move(reservationPair));
+      curEventIdSolver->clearActionStack();
+    }
+  }
+}
+
+llvm::SmallVector<std::pair<Operation *, int64_t>>
+Solver::getUserSyncFlagIdRewrites() {
+  llvm::SmallVector<std::pair<Operation *, int64_t>> rewrites;
+  for (auto &[userSyncGroupId, eventNode] : userSyncGroupEventIdNodes) {
+    auto ids = eventNode->getEventIds();
+    assert(ids.size() == 1);
+    auto flagId = ids.front();
+    auto groupOps = userSyncGroupOps[userSyncGroupId];
+    rewrites.push_back({groupOps.first->op, flagId});
+    rewrites.push_back({groupOps.second->op, flagId});
+  }
+
+  return rewrites;
+}
+
 llvm::LogicalResult Solver::considerOuterBackwardSyncPairs() {
   if (!options.considerOuterBackwardSyncPairs) {
     return llvm::failure();
@@ -2568,6 +2662,7 @@ llvm::LogicalResult Solver::runSolver(bool enableOpts1, bool enableOpts2) {
 
     reset();
     insertMergedBackwardSyncPairs();
+    insertUserSyncEventIdReservations();
     processOrders();
 
     if (llvm::succeeded(tryMovingOutBackwardSyncPairsToOuterLoops())) {
@@ -2607,6 +2702,7 @@ llvm::LogicalResult Solver::runSolver(bool enableOpts1, bool enableOpts2) {
 
   reset();
   insertMergedBackwardSyncPairs();
+  insertUserSyncEventIdReservations();
   processOrders();
 
   return llvm::success(runNum < maxRunNum);

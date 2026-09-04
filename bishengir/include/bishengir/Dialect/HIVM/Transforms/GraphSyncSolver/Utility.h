@@ -299,6 +299,7 @@ struct ConflictPair {
   bool waitOnFirstIterOnly{false};
   bool replacedWithUnitFlag{false};
   bool movedToOuterLoop{false};
+  bool eventIdReservationOnly{false};
   Loop *backwardSyncLoopOp{nullptr};
   Occurrence *backwardSyncLoopOcc{nullptr};
   EventIdInfo eventIdInfo;
@@ -348,6 +349,7 @@ struct ConflictPair {
     clonedConflictPair->backwardSyncLoopOcc = backwardSyncLoopOcc;
     clonedConflictPair->eventIdInfo = eventIdInfo;
     clonedConflictPair->eventIdNode = eventIdNode;
+    clonedConflictPair->eventIdReservationOnly = eventIdReservationOnly;
     return clonedConflictPair;
   }
 

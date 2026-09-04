@@ -61,6 +61,17 @@ public:
   std::vector<std::unique_ptr<ConflictPair>> chosenConflictedPairs,
       persistentChosenConflictedPairs;
 
+  // Reservation-only conflict pairs created from user-authored sync ops. These
+  // participate in event-id coloring but are not emitted by codegen.
+  std::vector<std::unique_ptr<ConflictPair>> userEventIdReservationPairs;
+
+  // Logical user group id -> translated solver set/wait ops.
+  llvm::DenseMap<int64_t, std::pair<SetFlagOp *, WaitFlagOp *>>
+      userSyncGroupOps;
+
+  // Logical user group id -> shared event-id coloring node.
+  llvm::DenseMap<int64_t, EventIdNode *> userSyncGroupEventIdNodes;
+
 protected:
   int64_t globalSetWaitIndex{0};
   int64_t maxReuseNum{20};
@@ -173,6 +184,10 @@ public:
   // Build before/after maps of sync ops computed from chosen conflicts.
   SyncBeforeAfterMap getBeforeAfterSyncMaps();
 
+  // Return existing user-authored sync ops paired with their assigned flag IDs.
+  llvm::SmallVector<std::pair<Operation *, int64_t>>
+  getUserSyncFlagIdRewrites();
+
 protected:
   void init(std::unique_ptr<IRTranslator> irTranslator) {
     funcOp = irTranslator->funcOp;
@@ -181,6 +196,7 @@ protected:
     unitFlagFeaturedOps = std::move(irTranslator->unitFlagFeaturedOps);
     opAllOccurrences = std::move(irTranslator->opAllOccurrences);
     processingOrders = std::move(irTranslator->processingOrders);
+    userSyncGroupOps = std::move(irTranslator->userSyncGroupOps);
   }
 
   // Reset solver internal bookkeeping prior to another pass.
@@ -409,6 +425,8 @@ protected:
   void mergeBackwardSyncPairs(SyncMap &syncMapBefore, SyncMap &syncMapAfter);
 
   void insertMergedBackwardSyncPairs();
+
+  void insertUserSyncEventIdReservations();
 
   llvm::LogicalResult considerOuterBackwardSyncPairs();
 

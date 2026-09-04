@@ -761,3 +761,33 @@ void CodeGenerator::generateFuncIrResultOps() {
   }
   resultFuncIrWasGenerated = true;
 }
+
+void CodeGenerator::applyUserSyncFlagIdRewrites() {
+  auto *ctx = funcOp->getContext();
+  Builder builder(ctx);
+
+  auto staticFlagIdName = StringAttr::get(ctx, "static_flag_id");
+  auto deduceName = StringAttr::get(ctx, "hivm.gss_deduce_flag_id");
+
+  for (auto &[op, flagId] : userSyncFlagIdRewrites) {
+    assert(op != nullptr);
+
+    if (auto setOp = dyn_cast<hivm::SyncBlockSetOp>(op)) {
+      assert(setOp.getDynamicFlagId() == TypedValue<IntegerType>{});
+      setOp.getOperation()->setAttr(staticFlagIdName,
+                                    builder.getI64IntegerAttr(flagId));
+      setOp.getOperation()->removeAttr(deduceName);
+      continue;
+    }
+
+    if (auto waitOp = dyn_cast<hivm::SyncBlockWaitOp>(op)) {
+      assert(waitOp.getDynamicFlagId() == TypedValue<IntegerType>{});
+      waitOp.getOperation()->setAttr(staticFlagIdName,
+                                     builder.getI64IntegerAttr(flagId));
+      waitOp.getOperation()->removeAttr(deduceName);
+      continue;
+    }
+
+    llvm_unreachable("expected user sync_block_set or sync_block_wait op");
+  }
+}

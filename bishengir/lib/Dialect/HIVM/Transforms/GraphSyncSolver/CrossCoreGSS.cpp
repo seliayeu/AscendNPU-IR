@@ -152,6 +152,7 @@ void CrossCoreGSSPass::runOnOperation() {
 
   CodeGenerator codeGen(std::move(solver));
   codeGen.generateResultOps();
+  codeGen.applyUserSyncFlagIdRewrites();
 
   LLVM_DEBUG({
     codeGen.generateFuncIrResultOps();

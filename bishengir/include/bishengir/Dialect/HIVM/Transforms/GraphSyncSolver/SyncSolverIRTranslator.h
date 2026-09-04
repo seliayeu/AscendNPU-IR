@@ -64,6 +64,10 @@ public:
   // cf::BranchOp operations.
   llvm::DenseMap<Value, llvm::SmallVector<Value>> blockArgAliases;
 
+  // Logical user group id -> translated solver set/wait ops.
+  llvm::DenseMap<int64_t, std::pair<SetFlagOp *, WaitFlagOp *>>
+      userSyncGroupOps;
+
 public:
   IRTranslator(func::FuncOp func, SyncSolverOptions options)
       : options(options), funcOp(func) {
@@ -71,6 +75,7 @@ public:
     auto scopeOp = funcIrBuilder(func.getRegion(), funcOp.get());
     funcOp->body.push_back(std::move(scopeOp));
     funcIr = std::move(funcOp);
+    validateUserSyncPairs();
     syncIrBuilder(funcIr.get());
   }
 
@@ -85,6 +90,14 @@ private:
   // Convert MLIR Region into the in-memory funcIr Scope representation.
   std::unique_ptr<Scope> funcIrBuilder(Region &region, OperationBase *parentOp,
                                        bool skipEmptyScopes = false);
+
+  // Return the logical user-sync group id from a deduce annotation, or none
+  // when the operation is not annotated for user-sync flag-id deduction.
+  std::optional<int64_t> getUserSyncGroupId(Operation *op);
+
+  // Assert that each deduced user-sync group has exactly one valid set/wait
+  // pair in the supported forward-only/cross-core subset.
+  void validateUserSyncPairs();
 
   // Create a decomposed representation for certain MMAD L1 ops if enabled.
   std::unique_ptr<OperationBase> getDecomposedMmadl1(hivm::MmadL1Op mmadl1Op,
@@ -136,6 +149,14 @@ private:
 
   std::unique_ptr<OperationBase> getCallOp(func::CallOp callOp,
                                            OperationBase *parentOp);
+
+  std::unique_ptr<OperationBase> buildUserSetFlagOp(hivm::SyncBlockSetOp op,
+                                                    OperationBase *parentOp,
+                                                    int64_t userSyncGroupId);
+
+  std::unique_ptr<OperationBase> buildUserWaitFlagOp(hivm::SyncBlockWaitOp op,
+                                                     OperationBase *parentOp,
+                                                     int64_t userSyncGroupId);
 
   std::optional<hivm::PIPE>
   getInferredPipe(Operation *op, TCoreType coreType,
