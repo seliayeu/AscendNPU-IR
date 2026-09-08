@@ -34,6 +34,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/DestinationStyleOpInterface.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
@@ -71,6 +72,28 @@ std::optional<int64_t> IRTranslator::getUserSyncGroupId(Operation *op) {
   assert(userSyncGroupId >= 0 &&
          "expected non-negative hivm.gss_deduce_flag_id");
   return userSyncGroupId;
+}
+
+std::optional<int64_t> IRTranslator::getUserSyncGroupKey(Operation *op) {
+  assert(op != nullptr);
+
+  auto userSyncGroupId = getUserSyncGroupId(op);
+  if (!userSyncGroupId) {
+    return std::nullopt;
+  }
+
+  // Scope the logical id by the call site the op was inlined from.
+  Attribute scope;
+  if (auto callsiteLoc = dyn_cast<CallSiteLoc>(op->getLoc())) {
+    scope = callsiteLoc.getCaller();
+  }
+
+  auto scopeKey = std::make_pair(*userSyncGroupId, scope);
+  auto [it, inserted] = userSyncGroupKeys.try_emplace(scopeKey, 0);
+  if (inserted) {
+    it->second = nextUserSyncGroupKey++;
+  }
+  return it->second;
 }
 
 void IRTranslator::validateUserSyncPairs() {
@@ -992,26 +1015,26 @@ std::unique_ptr<Scope> IRTranslator::funcIrBuilder(Region &region,
         continue;
       }
       if (auto syncBlockSetOp = dyn_cast<hivm::SyncBlockSetOp>(op)) {
-        if (auto userSyncGroupId =
-                getUserSyncGroupId(syncBlockSetOp.getOperation())) {
+        if (auto userSyncGroupKey =
+                getUserSyncGroupKey(syncBlockSetOp.getOperation())) {
           assert(syncBlockSetOp.getDynamicFlagId() ==
                      TypedValue<IntegerType>{} &&
                  "deduced user syncs do not support dynamic flag operands");
           if (auto flagOp = buildUserSetFlagOp(syncBlockSetOp, parScope,
-                                               *userSyncGroupId)) {
+                                               *userSyncGroupKey)) {
             parScope->body.push_back(std::move(flagOp));
           }
         }
         continue;
       }
       if (auto syncBlockWaitOp = dyn_cast<hivm::SyncBlockWaitOp>(op)) {
-        if (auto userSyncGroupId =
-                getUserSyncGroupId(syncBlockWaitOp.getOperation())) {
+        if (auto userSyncGroupKey =
+                getUserSyncGroupKey(syncBlockWaitOp.getOperation())) {
           assert(syncBlockWaitOp.getDynamicFlagId() ==
                      TypedValue<IntegerType>{} &&
                  "deduced user syncs do not support dynamic flag operands");
           if (auto flagOp = buildUserWaitFlagOp(syncBlockWaitOp, parScope,
-                                                *userSyncGroupId)) {
+                                                *userSyncGroupKey)) {
             parScope->body.push_back(std::move(flagOp));
           }
         }

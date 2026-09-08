@@ -76,6 +76,12 @@ public:
   // Ordered map anchor-id -> (anchor op / anchor-attr marked op).
   std::map<int64_t, OperationBase *> anchorOpMap;
 
+  // (user id, caller call-site location) -> sync-group key made during
+  // IR translation.
+  // Ops originating from the same inlined call site have same Attribute.
+  llvm::DenseMap<std::pair<int64_t, Attribute>, int64_t> userSyncGroupKeys;
+  int64_t nextUserSyncGroupKey{0};
+
   // Logical user group id -> translated solver set/wait ops.
   llvm::DenseMap<int64_t, std::pair<SetFlagOp *, WaitFlagOp *>>
       userSyncGroupOps;
@@ -115,6 +121,9 @@ protected:
   // Return the logical user-sync group id from a deduce annotation, or none
   // when the operation is not annotated for user-sync flag-id deduction.
   std::optional<int64_t> getUserSyncGroupId(Operation *op);
+
+  // Parse op to get user ID included in metadata.
+  std::optional<int64_t> getUserSyncGroupKey(Operation *op);
 
   // Assert that each deduced user-sync group has exactly one valid set/wait
   // pair in the supported forward-only/cross-core subset.

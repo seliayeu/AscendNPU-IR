@@ -57,6 +57,24 @@ module {
 // -----
 
 module {
+  func.func @deduce_same_id_different_callsites(%arg0: i64 {hacc.arg_type = #hacc.arg_type<ffts_base_address>}) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>, hivm.func_core_type = #hivm.func_core_type<MIX>} {
+    // CHECK-LABEL: func.func @deduce_same_id_different_callsites
+    // CHECK-NOT: hivm.gss_deduce_flag_id
+    // CHECK-DAG: hivm.hir.sync_block_set[<CUBE>, <PIPE_FIX>, <PIPE_S>] flag = 0
+    // CHECK-DAG: hivm.hir.sync_block_set[<CUBE>, <PIPE_FIX>, <PIPE_S>] flag = 1
+    // CHECK-DAG: hivm.hir.sync_block_wait[<VECTOR>, <PIPE_FIX>, <PIPE_S>] flag = 0
+    // CHECK-DAG: hivm.hir.sync_block_wait[<VECTOR>, <PIPE_FIX>, <PIPE_S>] flag = 1
+    hivm.hir.sync_block_set {hivm.gss_deduce_flag_id = 7 : i64} [<CUBE>, <PIPE_FIX>, <PIPE_S>] flag = -1 loc(callsite("helper.py":175:44 at "kernel_a.py":98:44))
+    hivm.hir.sync_block_set {hivm.gss_deduce_flag_id = 7 : i64} [<CUBE>, <PIPE_FIX>, <PIPE_S>] flag = -1 loc(callsite("helper.py":175:44 at "kernel_b.py":92:44))
+    hivm.hir.sync_block_wait {hivm.gss_deduce_flag_id = 7 : i64} [<VECTOR>, <PIPE_FIX>, <PIPE_S>] flag = -1 loc(callsite("helper.py":176:44 at "kernel_a.py":98:44))
+    hivm.hir.sync_block_wait {hivm.gss_deduce_flag_id = 7 : i64} [<VECTOR>, <PIPE_FIX>, <PIPE_S>] flag = -1 loc(callsite("helper.py":176:44 at "kernel_b.py":92:44))
+    return
+  }
+}
+
+// -----
+
+module {
   func.func @fixed_user_sync_unchanged(%arg0: i64 {hacc.arg_type = #hacc.arg_type<ffts_base_address>}) attributes {hacc.entry, hacc.function_kind = #hacc.function_kind<DEVICE>, hivm.func_core_type = #hivm.func_core_type<MIX>} {
     // CHECK-LABEL: func.func @fixed_user_sync_unchanged
     // CHECK: hivm.hir.sync_block_set[<CUBE>, <PIPE_FIX>, <PIPE_S>] flag = 7
