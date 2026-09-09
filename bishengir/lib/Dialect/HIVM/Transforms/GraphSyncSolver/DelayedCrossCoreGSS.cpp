@@ -335,6 +335,10 @@ void DelayedCrossCoreIRTranslator::initIRTranslators() {
       std::make_unique<IRTranslator>(tripletKernels.cubeFuncOp, options);
   vectorIRTranslator =
       std::make_unique<IRTranslator>(tripletKernels.vectorFuncOp, options);
+  if (llvm::failed(cubeIRTranslator->getResult()) ||
+      llvm::failed(vectorIRTranslator->getResult())) {
+    translationResult = llvm::failure();
+  }
 }
 
 // Build the synthetic mix-side IR consumed by the solver.
@@ -359,6 +363,10 @@ DelayedCrossCoreIRTranslator::buildDelayedFuncIr() {
   mixIRTranslatorOptions.buildUnrolledSyncIR = false;
   auto mixIRTranslator = std::make_unique<IRTranslator>(
       tripletKernels.mixFuncOp, mixIRTranslatorOptions);
+  if (llvm::failed(mixIRTranslator->getResult())) {
+    translationResult = llvm::failure();
+    return nullptr;
+  }
 
   // Anchor ids are dense within each mix function, so a simple range walk
   // visits every interval.
@@ -782,6 +790,10 @@ void DelayedCrossCoreGSSPass::crossCoreGssRunOnOperation(
   // process) and hand its translators off so we can talk to live IR later.
   auto mixIRTranslator =
       std::make_unique<DelayedCrossCoreIRTranslator>(t, options);
+  if (llvm::failed(mixIRTranslator->getResult())) {
+    signalPassFailure();
+    return;
+  }
   auto cubeIRTranslator = std::move(mixIRTranslator->cubeIRTranslator);
   auto vectorIRTranslator = std::move(mixIRTranslator->vectorIRTranslator);
 
@@ -866,7 +878,10 @@ void DelayedCrossCoreGSSPass::crossCoreGssRunOnOperation(
   // ops whose AnchorInfos point back to the live anchors on each side; the
   // remainder of this function fans those decisions out to all three
   // kernels.
-  mixSolver->solve();
+  if (llvm::failed(mixSolver->solve())) {
+    signalPassFailure();
+    return;
+  }
 
   DEBUG_WITH_TYPE("hivm-gss-profile", { mixSolver->perfInfo.print(); });
 

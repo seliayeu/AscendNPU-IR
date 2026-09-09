@@ -80,6 +80,7 @@ void SyncSolverBase::reset(bool resetEventIdRanOutOpts) {
     dontMoveBackwardSyncPairsToOutmostLoop = false;
     enableSaveCVPreloadingEventIdsOpt = false;
   }
+  userSyncFatalFailure = false;
   syncedPairs.clear();
   chosenConflictedPairs.clear();
   erasedChosenConflictedPairs.clear();
@@ -2836,29 +2837,66 @@ void SyncSolverBase::insertMergedBackwardSyncPairs() {
   }
 }
 
-void SyncSolverBase::insertUserSyncEventIdReservations() {
+llvm::LogicalResult SyncSolverBase::insertUserSyncEventIdReservations() {
   for (auto &[userSyncGroupId, groupOps] : userSyncGroupOps) {
     auto *setFlagOp = groupOps.first;
     auto *waitFlagOp = groupOps.second;
 
-    auto &setOccs = opAllOccurrences[setFlagOp];
-    auto &waitOccs = opAllOccurrences[waitFlagOp];
+    if (setFlagOp == nullptr || waitFlagOp == nullptr) {
+      Operation *diagnosticOp = nullptr;
+      if (setFlagOp != nullptr) {
+        diagnosticOp = setFlagOp->op;
+      } else if (waitFlagOp != nullptr) {
+        diagnosticOp = waitFlagOp->op;
+      } else if (funcOp) {
+        diagnosticOp = funcOp.getOperation();
+      }
+      if (diagnosticOp != nullptr) {
+        diagnosticOp->emitError("incomplete user sync group ")
+            << userSyncGroupId;
+      }
+      userSyncFatalFailure = true;
+      return llvm::failure();
+    }
 
-    assert(setOccs.size() == waitOccs.size());
+    auto setOccsIt = opAllOccurrences.find(setFlagOp);
+    auto waitOccsIt = opAllOccurrences.find(waitFlagOp);
+    if (setOccsIt == opAllOccurrences.end() ||
+        waitOccsIt == opAllOccurrences.end()) {
+      setFlagOp->op->emitError("failed to find sync solver occurrences for "
+                               "user sync group ")
+          << userSyncGroupId;
+      userSyncFatalFailure = true;
+      return llvm::failure();
+    }
 
-    for (int i = 0; i < static_cast<int>(setOccs.size()); ++i) {
+    auto &setOccs = setOccsIt->second;
+    auto &waitOccs = waitOccsIt->second;
+    if (setOccs.size() != waitOccs.size()) {
+      setFlagOp->op->emitError("user sync group has different numbers of "
+                               "set and wait occurrences for group ")
+          << userSyncGroupId;
+      userSyncFatalFailure = true;
+      return llvm::failure();
+    }
+
+    for (size_t i = 0; i < setOccs.size(); ++i) {
       auto reservationStart = setOccs[i]->endIndex;
       auto reservationEnd = waitOccs[i]->startIndex;
-      assert(reservationStart < reservationEnd);
+      if (reservationStart >= reservationEnd) {
+        waitFlagOp->op->emitError("user sync_block_wait must occur after its "
+                                  "matching sync_block_set for group ")
+            << userSyncGroupId;
+        userSyncFatalFailure = true;
+        return llvm::failure();
+      }
 
-      CorePipeInfo setCorePipeInfo = {setFlagOp->coreType,
-                                      setFlagOp->pipeSrc};
+      CorePipeInfo setCorePipeInfo = {setFlagOp->coreType, setFlagOp->pipeSrc};
       CorePipeInfo waitCorePipeInfo = {waitFlagOp->coreType,
                                        waitFlagOp->pipeDst};
       auto reservationPair = std::make_unique<ConflictPair>(
           nullptr, nullptr, setFlagOp, waitFlagOp, setOccs[i], waitOccs[i],
-          setCorePipeInfo, waitCorePipeInfo, reservationStart,
-          reservationEnd);
+          setCorePipeInfo, waitCorePipeInfo, reservationStart, reservationEnd);
       reservationPair->eventIdReservationOnly = true;
       reservationPair->isUseless = true;
       reservationPair->dontReuse = true;
@@ -2866,9 +2904,9 @@ void SyncSolverBase::insertUserSyncEventIdReservations() {
       reservationPair->couldNotRun = true;
       reservationPair->eventIdInfo = EventIdInfo(1);
 
-      auto &curEventIdSolver = getEventIdSolverRef(
-          reservationPair->setCorePipeInfo.pipe,
-          reservationPair->waitCorePipeInfo.pipe);
+      auto &curEventIdSolver =
+          getEventIdSolverRef(reservationPair->setCorePipeInfo.pipe,
+                              reservationPair->waitCorePipeInfo.pipe);
       curEventIdSolver->pushActionNone();
 
       if (userSyncGroupEventIdNodes.contains(userSyncGroupId)) {
@@ -2888,12 +2926,28 @@ void SyncSolverBase::insertUserSyncEventIdReservations() {
       auto intersectingEventIdNodes =
           getIntersectingEventIdNodes(reservationPair.get());
       curEventIdSolver->addConflicts(reservationPair->eventIdNode,
-                               intersectingEventIdNodes);
-      assert(curEventIdSolver->isColorable());
+                                     intersectingEventIdNodes);
+      if (!curEventIdSolver->isColorable()) {
+        curEventIdSolver->undoActions();
+        Operation *diagnosticOp =
+            funcOp ? funcOp.getOperation() : setFlagOp->op;
+        int64_t availableEventIds = getHWAvailableEventIdNum(
+            options.syncMode, reservationPair->setCorePipeInfo.pipe,
+            reservationPair->waitCorePipeInfo.pipe);
+        diagnosticOp->emitError("unable to assign a flag ID to user sync "
+                                "group ")
+            << userSyncGroupId
+            << ": too many simultaneously-live sync_block_set/wait groups "
+               "for the available event IDs ("
+            << availableEventIds << ")";
+        userSyncFatalFailure = true;
+        return llvm::failure();
+      }
       userEventIdReservationPairs.push_back(std::move(reservationPair));
       curEventIdSolver->clearActionStack();
     }
   }
+  return llvm::success();
 }
 
 
@@ -3048,7 +3102,9 @@ llvm::LogicalResult SyncSolverBase::runSolver(bool enableOpts1,
 
     reset();
     insertMergedBackwardSyncPairs();
-    insertUserSyncEventIdReservations();
+    if (llvm::failed(insertUserSyncEventIdReservations())) {
+      return llvm::failure();
+    }
     processOrders();
 
     if (llvm::succeeded(tryMovingOutBackwardSyncPairsToOuterLoops())) {
@@ -3091,7 +3147,9 @@ llvm::LogicalResult SyncSolverBase::runSolver(bool enableOpts1,
 
   reset();
   insertMergedBackwardSyncPairs();
-  insertUserSyncEventIdReservations();
+  if (llvm::failed(insertUserSyncEventIdReservations())) {
+    return llvm::failure();
+  }
   processOrders();
 
   return llvm::success(runNum < maxRunNum);
@@ -3107,25 +3165,34 @@ void SyncSolverBase::solveBlockAllMode() {
   }
 }
 
-void SyncSolverBase::solve() {
+llvm::LogicalResult SyncSolverBase::solve() {
   if (customMacroSync.hasConflict())
-    return;
+    return llvm::failure();
 
   if (options.enableBlockAllMode) {
     solveBlockAllMode();
-    return;
+    return llvm::success();
   }
   if (llvm::succeeded(runSolver())) {
-    return;
+    return llvm::success();
+  }
+  if (userSyncFatalFailure) {
+    return llvm::failure();
   }
   if (!options.isTestMode()) {
     if (llvm::succeeded(runSolver(/*enableOpts1=*/false))) {
-      return;
+      return llvm::success();
+    }
+    if (userSyncFatalFailure) {
+      return llvm::failure();
     }
     if (llvm::succeeded(
             runSolver(/*enableOpts1=*/false, /*enableOpts2=*/false))) {
-      return;
+      return llvm::success();
     }
   }
-  llvm::report_fatal_error("GSS: runSolver() failed.");
+  if (funcOp) {
+    funcOp.emitError("graph sync solver failed");
+  }
+  return llvm::failure();
 }

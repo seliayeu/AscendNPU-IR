@@ -85,6 +85,10 @@ void GraphSyncSolverPass::runOnOperation() {
   options.solverVersion = parseSyncSolverVersion(this->solverVersion);
 
   auto irTranslator = std::make_unique<IRTranslator>(funcOp, options);
+  if (llvm::failed(irTranslator->getResult())) {
+    signalPassFailure();
+    return;
+  }
 
   LLVM_DEBUG({
     llvm::dbgs() << "before:\n" << irTranslator->funcIr->str(0, true) << '\n';
@@ -103,7 +107,10 @@ void GraphSyncSolverPass::runOnOperation() {
     return signalPassFailure();
   }
 
-  solver->solve();
+  if (llvm::failed(solver->solve())) {
+    signalPassFailure();
+    return;
+  }
   DEBUG_WITH_TYPE("hivm-gss-profile", { solver->perfInfo.print(); });
 
   if (solver->hasCustomMacroEventIdConflict()) {

@@ -58,19 +58,25 @@ using namespace hivm::syncsolver;
 std::optional<int64_t> IRTranslator::getUserSyncGroupId(Operation *op) {
   assert(op != nullptr);
 
-  constexpr llvm::StringLiteral kDeduceFlagIdAttr(
-      "hivm.gss_deduce_flag_id");
+  constexpr llvm::StringLiteral kDeduceFlagIdAttr("hivm.gss_deduce_flag_id");
   Attribute attr = op->getAttr(kDeduceFlagIdAttr);
   if (!attr) {
     return std::nullopt;
   }
 
   auto intAttr = dyn_cast<IntegerAttr>(attr);
-  assert(intAttr && "expected integer hivm.gss_deduce_flag_id attribute");
+  if (!intAttr) {
+    op->emitError("hivm.gss_deduce_flag_id must be an integer attribute");
+    translationResult = llvm::failure();
+    return std::nullopt;
+  }
 
   int64_t userSyncGroupId = intAttr.getInt();
-  assert(userSyncGroupId >= 0 &&
-         "expected non-negative hivm.gss_deduce_flag_id");
+  if (userSyncGroupId < 0) {
+    op->emitError("hivm.gss_deduce_flag_id must be non-negative");
+    translationResult = llvm::failure();
+    return std::nullopt;
+  }
   return userSyncGroupId;
 }
 
@@ -96,30 +102,65 @@ std::optional<int64_t> IRTranslator::getUserSyncGroupKey(Operation *op) {
   return it->second;
 }
 
-void IRTranslator::validateUserSyncPairs() {
+llvm::LogicalResult IRTranslator::validateUserSyncPairs() {
   auto isConcreteCrossCoreType = [](hivm::TCoreType coreType) {
     return coreType == hivm::TCoreType::CUBE ||
            coreType == hivm::TCoreType::VECTOR;
   };
 
+  llvm::LogicalResult result = llvm::success();
   for (auto &[userSyncGroupId, groupOps] : userSyncGroupOps) {
-    (void)userSyncGroupId;
     auto *setOp = groupOps.first;
     auto *waitOp = groupOps.second;
 
-    assert(setOp && "missing sync_block_set for user sync group");
-    assert(waitOp && "missing sync_block_wait for user sync group");
-    assert(setOp->pipeSrc == waitOp->pipeSrc &&
-           "user sync set/wait source pipe mismatch");
-    assert(setOp->pipeDst == waitOp->pipeDst &&
-           "user sync set/wait destination pipe mismatch");
-    assert(isConcreteCrossCoreType(setOp->coreType) &&
-           "user sync set core type must be CUBE or VECTOR");
-    assert(isConcreteCrossCoreType(waitOp->coreType) &&
-           "user sync wait core type must be CUBE or VECTOR");
-    assert(setOp->coreType != waitOp->coreType &&
-           "user sync set/wait core types must be different");
+    if (setOp == nullptr) {
+      if (waitOp != nullptr) {
+        waitOp->op->emitError("missing matching sync_block_set for user "
+                              "sync group ")
+            << userSyncGroupId;
+      }
+      result = llvm::failure();
+      continue;
+    }
+    if (waitOp == nullptr) {
+      setOp->op->emitError("missing matching sync_block_wait for user "
+                           "sync group ")
+          << userSyncGroupId;
+      result = llvm::failure();
+      continue;
+    }
+    if (setOp->pipeSrc != waitOp->pipeSrc) {
+      waitOp->op->emitError("user sync_block_set/wait source pipe mismatch "
+                            "for group ")
+          << userSyncGroupId;
+      result = llvm::failure();
+    }
+    if (setOp->pipeDst != waitOp->pipeDst) {
+      waitOp->op->emitError("user sync_block_set/wait destination pipe "
+                            "mismatch for group ")
+          << userSyncGroupId;
+      result = llvm::failure();
+    }
+    if (!isConcreteCrossCoreType(setOp->coreType)) {
+      setOp->op->emitError("user sync_block_set core type must be CUBE or "
+                           "VECTOR for group ")
+          << userSyncGroupId;
+      result = llvm::failure();
+    }
+    if (!isConcreteCrossCoreType(waitOp->coreType)) {
+      waitOp->op->emitError("user sync_block_wait core type must be CUBE or "
+                            "VECTOR for group ")
+          << userSyncGroupId;
+      result = llvm::failure();
+    }
+    if (setOp->coreType == waitOp->coreType) {
+      waitOp->op->emitError("user sync_block_set/wait core types must be "
+                            "different for group ")
+          << userSyncGroupId;
+      result = llvm::failure();
+    }
   }
+  return result;
 }
 
 // Resolve a Value into the underlying pointer-like Values used for memory
@@ -674,8 +715,12 @@ IRTranslator::buildUserSetFlagOp(hivm::SyncBlockSetOp op,
   auto coreType = op.getTcoreTypeAttr().getTcoretype();
   flagOp->coreType = coreType;
 
-  assert(!userSyncGroupOps.contains(userSyncGroupId) &&
-         "duplicate sync_block_set or wait-before-set in user sync group");
+  if (userSyncGroupOps.contains(userSyncGroupId)) {
+    op->emitError("duplicate sync_block_set for user sync group ")
+        << userSyncGroupId;
+    translationResult = llvm::failure();
+    return nullptr;
+  }
   userSyncGroupOps[userSyncGroupId] = {flagOp.get(), nullptr};
 
   return flagOp;
@@ -693,10 +738,21 @@ IRTranslator::buildUserWaitFlagOp(hivm::SyncBlockWaitOp op,
   auto coreType = op.getTcoreTypeAttr().getTcoretype();
   flagOp->coreType = coreType;
 
-  assert(userSyncGroupOps.contains(userSyncGroupId) &&
-         userSyncGroupOps[userSyncGroupId].second == nullptr &&
-         "missing/duplicate sync_block_wait in user sync group");
-  userSyncGroupOps[userSyncGroupId].second = flagOp.get();
+  auto groupOpsIt = userSyncGroupOps.find(userSyncGroupId);
+  if (groupOpsIt == userSyncGroupOps.end()) {
+    op->emitError("sync_block_wait appears before matching sync_block_set "
+                  "for user sync group ")
+        << userSyncGroupId;
+    translationResult = llvm::failure();
+    return nullptr;
+  }
+  if (groupOpsIt->second.second != nullptr) {
+    op->emitError("duplicate sync_block_wait for user sync group ")
+        << userSyncGroupId;
+    translationResult = llvm::failure();
+    return nullptr;
+  }
+  groupOpsIt->second.second = flagOp.get();
 
   return flagOp;
 }
@@ -1017,9 +1073,13 @@ std::unique_ptr<Scope> IRTranslator::funcIrBuilder(Region &region,
       if (auto syncBlockSetOp = dyn_cast<hivm::SyncBlockSetOp>(op)) {
         if (auto userSyncGroupKey =
                 getUserSyncGroupKey(syncBlockSetOp.getOperation())) {
-          assert(syncBlockSetOp.getDynamicFlagId() ==
-                     TypedValue<IntegerType>{} &&
-                 "deduced user syncs do not support dynamic flag operands");
+          if (syncBlockSetOp.getDynamicFlagId() != TypedValue<IntegerType>{}) {
+            syncBlockSetOp.emitError("user sync_block_set with "
+                                     "hivm.gss_deduce_flag_id cannot use a "
+                                     "dynamic flag operand");
+            translationResult = llvm::failure();
+            continue;
+          }
           if (auto flagOp = buildUserSetFlagOp(syncBlockSetOp, parScope,
                                                *userSyncGroupKey)) {
             parScope->body.push_back(std::move(flagOp));
@@ -1030,9 +1090,13 @@ std::unique_ptr<Scope> IRTranslator::funcIrBuilder(Region &region,
       if (auto syncBlockWaitOp = dyn_cast<hivm::SyncBlockWaitOp>(op)) {
         if (auto userSyncGroupKey =
                 getUserSyncGroupKey(syncBlockWaitOp.getOperation())) {
-          assert(syncBlockWaitOp.getDynamicFlagId() ==
-                     TypedValue<IntegerType>{} &&
-                 "deduced user syncs do not support dynamic flag operands");
+          if (syncBlockWaitOp.getDynamicFlagId() != TypedValue<IntegerType>{}) {
+            syncBlockWaitOp.emitError("user sync_block_wait with "
+                                      "hivm.gss_deduce_flag_id cannot use a "
+                                      "dynamic flag operand");
+            translationResult = llvm::failure();
+            continue;
+          }
           if (auto flagOp = buildUserWaitFlagOp(syncBlockWaitOp, parScope,
                                                 *userSyncGroupKey)) {
             parScope->body.push_back(std::move(flagOp));

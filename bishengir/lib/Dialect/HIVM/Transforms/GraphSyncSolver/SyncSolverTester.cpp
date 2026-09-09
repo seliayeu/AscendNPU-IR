@@ -822,7 +822,9 @@ llvm::LogicalResult SyncTester::test() {
     }
   });
 
-  solver->solve();
+  if (llvm::failed(solver->solve())) {
+    return llvm::failure();
+  }
   DEBUG_WITH_TYPE("hivm-gss-profile", { solver->perfInfo.print(); });
 
   if (performanceOnly)
