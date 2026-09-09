@@ -27,6 +27,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/LogicalResult.h"
 #include <memory>
 #include <optional>
 #include <utility>
@@ -64,13 +65,16 @@ public:
   // cf::BranchOp operations.
   llvm::DenseMap<Value, llvm::SmallVector<Value>> blockArgAliases;
 
+  // Failure state accumulated while translating MLIR to solver IR.
+  llvm::LogicalResult translationResult{llvm::success()};
+
   // (user id, caller call-site location) -> sync-group key made during
   // IR translation.
   // Ops originating from the same inlined call site have same Attribute.
   llvm::DenseMap<std::pair<int64_t, Attribute>, int64_t> userSyncGroupKeys;
   int64_t nextUserSyncGroupKey{0};
 
-  // Logical user group id -> translated solver set/wait ops.
+  // Scoped user sync group key -> translated solver set/wait ops.
   llvm::DenseMap<int64_t, std::pair<SetFlagOp *, WaitFlagOp *>>
       userSyncGroupOps;
 
@@ -81,7 +85,13 @@ public:
     auto scopeOp = funcIrBuilder(func.getRegion(), funcOp.get());
     funcOp->body.push_back(std::move(scopeOp));
     funcIr = std::move(funcOp);
-    validateUserSyncPairs();
+    if (llvm::failed(translationResult)) {
+      return;
+    }
+    translationResult = validateUserSyncPairs();
+    if (llvm::failed(translationResult)) {
+      return;
+    }
     syncIrBuilder(funcIr.get());
   }
 
@@ -89,6 +99,8 @@ public:
       : options(options), funcIr(std::move(funcIr)) {
     syncIrBuilder(this->funcIr.get());
   }
+
+  llvm::LogicalResult getResult() const { return translationResult; }
 
 private:
   int64_t globalIndex{0};
@@ -104,9 +116,9 @@ private:
   // Parse op to get user ID included in metadata.
   std::optional<int64_t> getUserSyncGroupKey(Operation *op);
 
-  // Assert that each deduced user-sync group has exactly one valid set/wait
+  // Verify that each deduced user-sync group has exactly one valid set/wait
   // pair in the supported forward-only/cross-core subset.
-  void validateUserSyncPairs();
+  llvm::LogicalResult validateUserSyncPairs();
 
   // Create a decomposed representation for certain MMAD L1 ops if enabled.
   std::unique_ptr<OperationBase> getDecomposedMmadl1(hivm::MmadL1Op mmadl1Op,
@@ -138,8 +150,7 @@ private:
   llvm::SmallVector<Value> tracebackMemValsStep(Value val);
 
   // Extract memory-related Values from a list of pointer values.
-  llvm::SmallVector<Value>
-  getMemoryOps(const SmallVector<Value> &vals);
+  llvm::SmallVector<Value> getMemoryOps(const SmallVector<Value> &vals);
 
   // Return read and write memory operand lists for an MLIR operation.
   std::pair<llvm::SmallVector<Value>, llvm::SmallVector<Value>>

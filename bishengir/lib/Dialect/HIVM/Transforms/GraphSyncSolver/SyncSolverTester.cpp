@@ -367,8 +367,9 @@ llvm::LogicalResult SyncTester::runSimulation(int runId, bool debugPrint) {
                corePipe);
         auto &triggeredOps = triggeredSetFlagOps[getTriggeredGroup(waitFlagOp)];
         assert(!waitFlagOp->eventIds.empty());
-        auto eventId = waitFlagOp->eventIds[loopIdx % static_cast<int>(
-            waitFlagOp->eventIds.size())];
+        auto eventId =
+            waitFlagOp->eventIds[loopIdx %
+                                 static_cast<int>(waitFlagOp->eventIds.size())];
         auto it = triggeredOps.find(eventId);
         if (it != triggeredOps.end()) {
           assert((*it) == eventId);
@@ -668,7 +669,9 @@ llvm::LogicalResult SyncTester::test() {
     }
   });
 
-  solver->solve();
+  if (llvm::failed(solver->solve())) {
+    return llvm::failure();
+  }
 
   CodeGenerator codeGen(std::move(solver));
   codeGen.generateFuncIrResultOps();

@@ -132,6 +132,10 @@ void CrossCoreGSSPass::runOnOperation() {
   }
 
   auto irTranslator = std::make_unique<IRTranslator>(funcOp, options);
+  if (llvm::failed(irTranslator->getResult())) {
+    signalPassFailure();
+    return;
+  }
 
   LLVM_DEBUG({
     llvm::dbgs() << "before:\n" << irTranslator->funcIr->str(0, true) << '\n';
@@ -148,7 +152,10 @@ void CrossCoreGSSPass::runOnOperation() {
     }
   });
 
-  solver->solve();
+  if (llvm::failed(solver->solve())) {
+    signalPassFailure();
+    return;
+  }
 
   CodeGenerator codeGen(std::move(solver));
   codeGen.generateResultOps();

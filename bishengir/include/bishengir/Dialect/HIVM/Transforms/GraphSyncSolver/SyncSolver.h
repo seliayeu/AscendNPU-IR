@@ -65,14 +65,16 @@ public:
   // participate in event-id coloring but are not emitted by codegen.
   std::vector<std::unique_ptr<ConflictPair>> userEventIdReservationPairs;
 
-  // Logical user group id -> translated solver set/wait ops.
+  // Scoped user sync group key -> translated solver set/wait ops.
   llvm::DenseMap<int64_t, std::pair<SetFlagOp *, WaitFlagOp *>>
       userSyncGroupOps;
 
-  // Logical user group id -> shared event-id coloring node.
+  // Scoped user sync group key -> shared event-id coloring node.
   llvm::DenseMap<int64_t, EventIdNode *> userSyncGroupEventIdNodes;
 
 protected:
+  bool userSyncFatalFailure{false};
+
   int64_t globalSetWaitIndex{0};
   int64_t maxReuseNum{20};
   int64_t maxRunNum{99};
@@ -179,7 +181,7 @@ public:
   }
 
   // Orchestrate the solving process (entry point).
-  void solve();
+  llvm::LogicalResult solve();
 
   // Build before/after maps of sync ops computed from chosen conflicts.
   SyncBeforeAfterMap getBeforeAfterSyncMaps();
@@ -426,7 +428,7 @@ protected:
 
   void insertMergedBackwardSyncPairs();
 
-  void insertUserSyncEventIdReservations();
+  llvm::LogicalResult insertUserSyncEventIdReservations();
 
   llvm::LogicalResult considerOuterBackwardSyncPairs();
 
