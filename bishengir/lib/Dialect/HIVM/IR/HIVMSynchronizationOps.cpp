@@ -18,6 +18,8 @@
 #include "bishengir/Dialect/HIVM/IR/HIVM.h"
 #include "llvm/Support/LogicalResult.h"
 
+#include <optional>
+
 #define GET_OP_CLASSES
 #include "bishengir/Dialect/HIVM/IR/HIVMSynchronizationOps.cpp.inc"
 
@@ -81,6 +83,32 @@ void hivm::printFlagID(OpAsmPrinter &printer, Operation *op,
     return;
   }
   printer << flagIDValue;
+}
+
+static LogicalResult
+verifySyncBlockMutexFlag(Operation *op, Value mutex,
+                         std::optional<IntegerAttr> flagIDAttr,
+                         TypedValue<IntegerType> flagIDValue) {
+  if (!mutex) {
+    return success();
+  }
+
+  if (flagIDValue != TypedValue<IntegerType>{}) {
+    return op->emitOpError(
+        "mutex-based sync_block op cannot use a dynamic flag operand");
+  }
+
+  if (!flagIDAttr.has_value()) {
+    return op->emitOpError(
+        "mutex-based sync_block op requires placeholder static flag ID -1");
+  }
+
+  if ((*flagIDAttr).getInt() != -1) {
+    return op->emitOpError(
+        "mutex-based sync_block op must use placeholder static flag ID -1");
+  }
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -165,18 +193,27 @@ LogicalResult SyncBlockSetOp::verify() {
   if (!flagIdIDAttr.has_value() && flagIdValue == TypedValue<IntegerType>{}) {
     return emitOpError("Flag ID is needed!");
   }
-  return success();
+
+  return verifySyncBlockMutexFlag(getOperation(), getMutex(), flagIdIDAttr,
+                                  flagIdValue);
 }
 
 void SyncBlockSetOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                            TCoreTypeAttr tcore_type, PipeAttr tpipe,
                            PipeAttr pipe, OpFoldResult flag_id) {
+  build(odsBuilder, odsState, Value{}, tcore_type, tpipe, pipe, flag_id);
+}
+
+void SyncBlockSetOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                           Value mutex, TCoreTypeAttr tcore_type,
+                           PipeAttr tpipe, PipeAttr pipe,
+                           OpFoldResult flag_id) {
   if (auto attr = dyn_cast_if_present<Attribute>(flag_id)) {
-    build(odsBuilder, odsState, tcore_type, tpipe, pipe,
+    build(odsBuilder, odsState, mutex, tcore_type, tpipe, pipe,
           cast<IntegerAttr>(attr), nullptr, nullptr,
           /*tsync_instr_mode=*/{});
   } else {
-    build(odsBuilder, odsState, tcore_type, tpipe, pipe, nullptr,
+    build(odsBuilder, odsState, mutex, tcore_type, tpipe, pipe, nullptr,
           cast<Value>(flag_id), nullptr, /*tsync_instr_mode=*/{});
   }
 }
@@ -186,11 +223,20 @@ void SyncBlockSetOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                            PipeAttr pipe, OpFoldResult flag_id,
                            Value ffts_base_addr,
                            hivm::SyncBlockInstrModeAttr tsync_instr_mode) {
+  build(odsBuilder, odsState, Value{}, tcore_type, tpipe, pipe, flag_id,
+        ffts_base_addr, tsync_instr_mode);
+}
+
+void SyncBlockSetOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                           Value mutex, TCoreTypeAttr tcore_type,
+                           PipeAttr tpipe, PipeAttr pipe, OpFoldResult flag_id,
+                           Value ffts_base_addr,
+                           hivm::SyncBlockInstrModeAttr tsync_instr_mode) {
   if (auto attr = dyn_cast_if_present<Attribute>(flag_id)) {
-    build(odsBuilder, odsState, tcore_type, tpipe, pipe,
+    build(odsBuilder, odsState, mutex, tcore_type, tpipe, pipe,
           cast<IntegerAttr>(attr), nullptr, ffts_base_addr, tsync_instr_mode);
   } else {
-    build(odsBuilder, odsState, tcore_type, tpipe, pipe, nullptr,
+    build(odsBuilder, odsState, mutex, tcore_type, tpipe, pipe, nullptr,
           cast<Value>(flag_id), ffts_base_addr, tsync_instr_mode);
   }
 }
@@ -216,17 +262,26 @@ LogicalResult SyncBlockWaitOp::verify() {
   if (!flagIdIDAttr.has_value() && flagIdValue == TypedValue<IntegerType>{}) {
     return emitOpError("Flag ID is needed!");
   }
-  return success();
+
+  return verifySyncBlockMutexFlag(getOperation(), getMutex(), flagIdIDAttr,
+                                  flagIdValue);
 }
 
 void SyncBlockWaitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                             TCoreTypeAttr tcore_type, PipeAttr tpipe,
                             PipeAttr pipe, OpFoldResult flag_id) {
+  build(odsBuilder, odsState, Value{}, tcore_type, tpipe, pipe, flag_id);
+}
+
+void SyncBlockWaitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                            Value mutex, TCoreTypeAttr tcore_type,
+                            PipeAttr tpipe, PipeAttr pipe,
+                            OpFoldResult flag_id) {
   if (auto attr = dyn_cast_if_present<Attribute>(flag_id)) {
-    build(odsBuilder, odsState, tcore_type, tpipe, pipe,
+    build(odsBuilder, odsState, mutex, tcore_type, tpipe, pipe,
           cast<IntegerAttr>(attr), nullptr);
   } else {
-    build(odsBuilder, odsState, tcore_type, tpipe, pipe, nullptr,
+    build(odsBuilder, odsState, mutex, tcore_type, tpipe, pipe, nullptr,
           cast<Value>(flag_id));
   }
 }

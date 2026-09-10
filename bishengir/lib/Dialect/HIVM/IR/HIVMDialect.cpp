@@ -48,6 +48,9 @@
 #define GET_ATTRDEF_CLASSES
 #include "bishengir/Dialect/HIVM/IR/HIVMAttrs.cpp.inc"
 
+#define GET_TYPEDEF_CLASSES
+#include "bishengir/Dialect/HIVM/IR/HIVMTypes.cpp.inc"
+
 #include "bishengir/Dialect/HIVM/IR/HIVMDialect.cpp.inc"
 
 #define GET_OP_CLASSES

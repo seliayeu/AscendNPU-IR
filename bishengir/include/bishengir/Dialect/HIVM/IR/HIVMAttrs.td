@@ -49,6 +49,21 @@ class HIVM_I32EnumAttr<string mnemonic, HIVM_I32Enum enumInfo>
 }
 
 //===----------------------------------------------------------------------===//
+// HIVM Types.
+//===----------------------------------------------------------------------===//
+
+def HIVM_SyncBlockMutexType : TypeDef<HIVM_Dialect, "SyncBlockMutex"> {
+  let mnemonic = "sync_block_mutex";
+  let summary = "SSA identity token for user sync_block_set/wait pairing";
+  let description = [{
+    `!hivm.sync_block_mutex` is a compile-time-only SSA identity token used to
+    tie one user-authored `sync_block_set` to one user-authored
+    `sync_block_wait`. It has no runtime representation and is consumed by the
+    cross-core graph sync solver when assigning concrete physical flag IDs.
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Iterator Type
 //===----------------------------------------------------------------------===//
 
