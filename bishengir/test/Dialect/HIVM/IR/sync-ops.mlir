@@ -77,6 +77,18 @@ func.func @test_sync_block_wait_flag_value() {
 }
 
 // -----
+// CHECK-LABEL: @test_sync_block_mutex
+func.func @test_sync_block_mutex() {
+  // CHECK: %[[M:.*]] = hivm.hir.create_sync_block_mutex : !hivm.sync_block_mutex
+  %mutex = hivm.hir.create_sync_block_mutex : !hivm.sync_block_mutex
+  // CHECK: hivm.hir.sync_block_set %[[M]] [<CUBE>, <PIPE_FIX>, <PIPE_S>] flag = -1
+  hivm.hir.sync_block_set %mutex [#hivm.tcore_type<CUBE>, #hivm.pipe<PIPE_FIX>, #hivm.pipe<PIPE_S>] flag = -1
+  // CHECK: hivm.hir.sync_block_wait %[[M]] [<VECTOR>, <PIPE_FIX>, <PIPE_S>] flag = -1
+  hivm.hir.sync_block_wait %mutex [#hivm.tcore_type<VECTOR>, #hivm.pipe<PIPE_FIX>, #hivm.pipe<PIPE_S>] flag = -1
+  return
+}
+
+// -----
 // CHECK-LABEL: @test_create_sync_block_lock_alloc
 func.func @test_create_sync_block_lock_alloc() {
   %lock = hivm.hir.create_sync_block_lock : memref<1xi64>

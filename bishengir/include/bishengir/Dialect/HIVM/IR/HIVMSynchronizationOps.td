@@ -126,9 +126,22 @@ def SyncBlockOp : HIVM_SynchronizationOp<"sync_block"> {
   let hasVerifier = 1;
 }
 
+def CreateSyncBlockMutexOp : HIVM_Op<"create_sync_block_mutex"> {
+  let summary = "create a compile-time-only sync block mutex token";
+  let description = [{
+    Creates an SSA identity token used to associate one user-authored
+    `sync_block_set` operation with one user-authored `sync_block_wait`
+    operation before GSS assigns a concrete flag ID. The token has no runtime
+    representation and should be erased after the flag ID has been assigned.
+  }];
+  let results = (outs HIVM_SyncBlockMutexType:$mutex);
+  let assemblyFormat = "attr-dict `:` type($mutex)";
+}
+
 def SyncBlockSetOp : HIVM_SynchronizationOp<"sync_block_set", [AttrSizedOperandSegments]> {
   let summary = "hivm set block sync.";
-  let arguments = (ins HIVM_TCoreTypeAttr:$tcore_type,
+  let arguments = (ins Optional<HIVM_SyncBlockMutexType>:$mutex,
+                       HIVM_TCoreTypeAttr:$tcore_type,
                        HIVM_PipeAttr:$tpipe,
                        HIVM_PipeAttr:$pipe,
                        OptionalAttr<Builtin_IntegerAttr>:$static_flag_id,
@@ -138,7 +151,7 @@ def SyncBlockSetOp : HIVM_SynchronizationOp<"sync_block_set", [AttrSizedOperandS
                          "INTRA_BLOCK_SYNCHRONIZATION">:$tsync_instr_mode
   );
   let assemblyFormat = [{
-    attr-dict `[` $tcore_type `,` $tpipe `,` $pipe`]`
+    attr-dict ($mutex^)? `[` $tcore_type `,` $tpipe `,` $pipe`]`
     `flag` `=` custom<FlagID>($static_flag_id, $dynamic_flag_id)
     (`ffts_base_addr` `=` $ffts_base_addr^)?
     (`sync_instr_mode` `=` $tsync_instr_mode^)?
@@ -146,7 +159,14 @@ def SyncBlockSetOp : HIVM_SynchronizationOp<"sync_block_set", [AttrSizedOperandS
   let builders = [
     OpBuilder<(ins "TCoreTypeAttr":$tcore_type, "PipeAttr":$tpipe, "PipeAttr":$pipe,
                    "OpFoldResult":$flag_id)>,
+    OpBuilder<(ins "Value":$mutex, "TCoreTypeAttr":$tcore_type,
+                   "PipeAttr":$tpipe, "PipeAttr":$pipe,
+                   "OpFoldResult":$flag_id)>,
     OpBuilder<(ins "TCoreTypeAttr":$tcore_type, "PipeAttr":$tpipe, "PipeAttr":$pipe,
+                   "OpFoldResult":$flag_id, "Value":$ffts_base_addr,
+                   "SyncBlockInstrModeAttr":$tsync_instr_mode)>,
+    OpBuilder<(ins "Value":$mutex, "TCoreTypeAttr":$tcore_type,
+                   "PipeAttr":$tpipe, "PipeAttr":$pipe,
                    "OpFoldResult":$flag_id, "Value":$ffts_base_addr,
                    "SyncBlockInstrModeAttr":$tsync_instr_mode)>
   ];
@@ -156,20 +176,25 @@ def SyncBlockSetOp : HIVM_SynchronizationOp<"sync_block_set", [AttrSizedOperandS
   let hasVerifier = 1;
 }
 
-def SyncBlockWaitOp : HIVM_SynchronizationOp<"sync_block_wait"> {
+def SyncBlockWaitOp : HIVM_SynchronizationOp<"sync_block_wait",
+                                             [AttrSizedOperandSegments]> {
   let summary = "hivm wait block sync.";
-  let arguments = (ins HIVM_TCoreTypeAttr:$tcore_type,
+  let arguments = (ins Optional<HIVM_SyncBlockMutexType>:$mutex,
+                       HIVM_TCoreTypeAttr:$tcore_type,
                        HIVM_PipeAttr:$tpipe,
                        HIVM_PipeAttr:$pipe,
                        OptionalAttr<Builtin_IntegerAttr>:$static_flag_id,
                        Optional<I64>:$dynamic_flag_id
   );
   let assemblyFormat = [{
-    attr-dict `[` $tcore_type `,` $tpipe `,` $pipe`]`
+    attr-dict ($mutex^)? `[` $tcore_type `,` $tpipe `,` $pipe`]`
     `flag` `=` custom<FlagID>($static_flag_id, $dynamic_flag_id)
   }];
   let builders = [
     OpBuilder<(ins "TCoreTypeAttr":$tcore_type, "PipeAttr":$tpipe, "PipeAttr":$pipe,
+                   "OpFoldResult":$flag_id)>,
+    OpBuilder<(ins "Value":$mutex, "TCoreTypeAttr":$tcore_type,
+                   "PipeAttr":$tpipe, "PipeAttr":$pipe,
                    "OpFoldResult":$flag_id)>
   ];
   let extraClassDeclaration = [{
