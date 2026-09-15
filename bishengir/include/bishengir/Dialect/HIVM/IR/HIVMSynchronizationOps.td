@@ -126,7 +126,8 @@ def SyncBlockOp : HIVM_SynchronizationOp<"sync_block"> {
   let hasVerifier = 1;
 }
 
-def CreateSyncBlockMutexOp : HIVM_Op<"create_sync_block_mutex"> {
+def CreateSyncBlockMutexOp : HIVM_Op<"create_sync_block_mutex",
+                                      [MemoryEffects<[MemWrite]>]> {
   let summary = "create a compile-time-only sync block mutex token";
   let description = [{
     Creates an SSA identity token used to associate one user-authored

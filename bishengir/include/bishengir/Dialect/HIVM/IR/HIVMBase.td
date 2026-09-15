@@ -47,6 +47,7 @@ def HIVM_Dialect : Dialect {
   ];
   let hasCanonicalizer = 1;
   let useDefaultAttributePrinterParser = 1;
+  let useDefaultTypePrinterParser = 1;
 }
 
 //===----------------------------------------------------------------------===//

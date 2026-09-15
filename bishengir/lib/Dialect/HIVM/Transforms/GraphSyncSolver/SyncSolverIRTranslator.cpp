@@ -54,47 +54,21 @@
 using namespace mlir;
 using namespace hivm::syncsolver;
 
-std::optional<int64_t> IRTranslator::getUserSyncGroupId(Operation *op) {
-  assert(op != nullptr);
-
-  constexpr llvm::StringLiteral kDeduceFlagIdAttr("hivm.gss_deduce_flag_id");
-  Attribute attr = op->getAttr(kDeduceFlagIdAttr);
-  if (!attr) {
-    return std::nullopt;
-  }
-
-  auto intAttr = dyn_cast<IntegerAttr>(attr);
-  if (!intAttr) {
-    op->emitError("hivm.gss_deduce_flag_id must be an integer attribute");
-    translationResult = llvm::failure();
-    return std::nullopt;
-  }
-
-  int64_t userSyncGroupId = intAttr.getInt();
-  if (userSyncGroupId < 0) {
-    op->emitError("hivm.gss_deduce_flag_id must be non-negative");
-    translationResult = llvm::failure();
-    return std::nullopt;
-  }
-  return userSyncGroupId;
-}
-
 std::optional<int64_t> IRTranslator::getUserSyncGroupKey(Operation *op) {
   assert(op != nullptr);
 
-  auto userSyncGroupId = getUserSyncGroupId(op);
-  if (!userSyncGroupId) {
+  Value mutex;
+  if (auto setOp = dyn_cast<hivm::SyncBlockSetOp>(op)) {
+    mutex = setOp.getMutex();
+  } else if (auto waitOp = dyn_cast<hivm::SyncBlockWaitOp>(op)) {
+    mutex = waitOp.getMutex();
+  }
+
+  if (!mutex) {
     return std::nullopt;
   }
 
-  // Scope the logical id by the call site the op was inlined from.
-  Attribute scope;
-  if (auto callsiteLoc = dyn_cast<CallSiteLoc>(op->getLoc())) {
-    scope = callsiteLoc.getCaller();
-  }
-
-  auto scopeKey = std::make_pair(*userSyncGroupId, scope);
-  auto [it, inserted] = userSyncGroupKeys.try_emplace(scopeKey, 0);
+  auto [it, inserted] = userSyncMutexKeys.try_emplace(mutex, 0);
   if (inserted) {
     it->second = nextUserSyncGroupKey++;
   }
@@ -795,9 +769,8 @@ std::unique_ptr<Scope> IRTranslator::funcIrBuilder(Region &region,
         if (auto userSyncGroupKey =
                 getUserSyncGroupKey(syncBlockSetOp.getOperation())) {
           if (syncBlockSetOp.getDynamicFlagId() != TypedValue<IntegerType>{}) {
-            syncBlockSetOp.emitError("user sync_block_set with "
-                                     "hivm.gss_deduce_flag_id cannot use a "
-                                     "dynamic flag operand");
+            syncBlockSetOp.emitError("mutex-based user sync_block_set cannot "
+                                     "use a dynamic flag operand");
             translationResult = llvm::failure();
             continue;
           }
@@ -810,9 +783,8 @@ std::unique_ptr<Scope> IRTranslator::funcIrBuilder(Region &region,
         if (auto userSyncGroupKey =
                 getUserSyncGroupKey(syncBlockWaitOp.getOperation())) {
           if (syncBlockWaitOp.getDynamicFlagId() != TypedValue<IntegerType>{}) {
-            syncBlockWaitOp.emitError("user sync_block_wait with "
-                                      "hivm.gss_deduce_flag_id cannot use a "
-                                      "dynamic flag operand");
+            syncBlockWaitOp.emitError("mutex-based user sync_block_wait cannot "
+                                      "use a dynamic flag operand");
             translationResult = llvm::failure();
             continue;
           }
