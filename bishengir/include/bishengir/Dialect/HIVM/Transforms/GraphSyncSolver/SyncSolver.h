@@ -104,11 +104,11 @@ public:
   // participate in event-id coloring but are not emitted by codegen.
   std::vector<std::unique_ptr<ConflictPair>> userEventIdReservationPairs;
 
-  // Scoped user sync group key -> translated solver set/wait ops.
+  // User sync group key -> translated solver set/wait ops.
   llvm::DenseMap<int64_t, std::pair<SetFlagOp *, WaitFlagOp *>>
       userSyncGroupOps;
 
-  // Scoped user sync group key -> shared event-id coloring node.
+  // User sync group key -> shared event-id coloring node.
   llvm::DenseMap<int64_t, EventIdNode *> userSyncGroupEventIdNodes;
 
 protected:

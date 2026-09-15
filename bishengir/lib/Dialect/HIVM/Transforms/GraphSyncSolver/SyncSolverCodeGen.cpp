@@ -29,6 +29,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -969,7 +970,7 @@ void CodeGenerator::applyUserSyncFlagIdRewrites() {
   Builder builder(ctx);
 
   auto staticFlagIdName = StringAttr::get(ctx, "static_flag_id");
-  auto deduceName = StringAttr::get(ctx, "hivm.gss_deduce_flag_id");
+  llvm::SmallPtrSet<Operation *, 8> mutexCreateOps;
 
   for (auto &[op, flagId] : userSyncFlagIdRewrites) {
     assert(op != nullptr);
@@ -978,7 +979,13 @@ void CodeGenerator::applyUserSyncFlagIdRewrites() {
       assert(setOp.getDynamicFlagId() == TypedValue<IntegerType>{});
       setOp.getOperation()->setAttr(staticFlagIdName,
                                     builder.getI64IntegerAttr(flagId));
-      setOp.getOperation()->removeAttr(deduceName);
+      if (Value mutex = setOp.getMutex()) {
+        if (auto createOp =
+                mutex.getDefiningOp<hivm::CreateSyncBlockMutexOp>()) {
+          mutexCreateOps.insert(createOp.getOperation());
+        }
+        setOp.getMutexMutable().clear();
+      }
       continue;
     }
 
@@ -986,10 +993,22 @@ void CodeGenerator::applyUserSyncFlagIdRewrites() {
       assert(waitOp.getDynamicFlagId() == TypedValue<IntegerType>{});
       waitOp.getOperation()->setAttr(staticFlagIdName,
                                      builder.getI64IntegerAttr(flagId));
-      waitOp.getOperation()->removeAttr(deduceName);
+      if (Value mutex = waitOp.getMutex()) {
+        if (auto createOp =
+                mutex.getDefiningOp<hivm::CreateSyncBlockMutexOp>()) {
+          mutexCreateOps.insert(createOp.getOperation());
+        }
+        waitOp.getMutexMutable().clear();
+      }
       continue;
     }
 
     llvm_unreachable("expected user sync_block_set or sync_block_wait op");
+  }
+
+  for (Operation *op : mutexCreateOps) {
+    if (op->use_empty()) {
+      op->erase();
+    }
   }
 }

@@ -81,13 +81,11 @@ public:
   // Failure state accumulated while translating MLIR to solver IR.
   llvm::LogicalResult translationResult{llvm::success()};
 
-  // (user id, caller call-site location) -> sync-group key made during
-  // IR translation.
-  // Ops originating from the same inlined call site have same Attribute.
-  llvm::DenseMap<std::pair<int64_t, Attribute>, int64_t> userSyncGroupKeys;
+  // Mutex SSA value -> sync-group key made during IR translation.
+  llvm::DenseMap<Value, int64_t> userSyncMutexKeys;
   int64_t nextUserSyncGroupKey{0};
 
-  // Scoped user sync group key -> translated solver set/wait ops.
+  // User sync group key -> translated solver set/wait ops.
   llvm::DenseMap<int64_t, std::pair<SetFlagOp *, WaitFlagOp *>>
       userSyncGroupOps;
 
@@ -131,14 +129,11 @@ protected:
   std::unique_ptr<Scope> funcIrBuilder(Region &region, OperationBase *parentOp,
                                        bool skipEmptyScopes = false);
 
-  // Return the logical user-sync group id from a deduce annotation, or none
-  // when the operation is not annotated for user-sync flag-id deduction.
-  std::optional<int64_t> getUserSyncGroupId(Operation *op);
-
-  // Parse op to get user ID included in metadata.
+  // Return the logical user-sync group key for a mutex-bearing sync op, or none
+  // when the operation does not use a mutex.
   std::optional<int64_t> getUserSyncGroupKey(Operation *op);
 
-  // Verify that each deduced user-sync group has exactly one valid set/wait
+  // Verify that each mutex-based user-sync group has exactly one valid set/wait
   // pair in the supported forward-only/cross-core subset.
   llvm::LogicalResult validateUserSyncPairs();
 
