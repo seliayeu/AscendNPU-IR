@@ -206,10 +206,18 @@ def SyncBlockWaitOp : HIVM_SynchronizationOp<"sync_block_wait",
     (`sync_instr_mode` `=` $tsync_instr_mode^)?
   }];
   let builders = [
-    OpBuilder<(ins "TCoreTypeAttr":$tcore_type, "PipeAttr":$tpipe, "PipeAttr":$pipe,
+    OpBuilder<(ins "TCoreTypeAttr":$tcore_type, "PipeAttr":$tpipe,
+                   "PipeAttr":$pipe, "OpFoldResult":$flag_id)>,
+    OpBuilder<(ins "Value":$mutex, "TCoreTypeAttr":$tcore_type,
+                   "PipeAttr":$tpipe, "PipeAttr":$pipe,
                    "OpFoldResult":$flag_id)>,
-    OpBuilder<(ins "Value":$mutex, "TCoreTypeAttr":$tcore_type, "PipeAttr":$tpipe, "PipeAttr":$pipe,
-                   "OpFoldResult":$flag_id, "SyncBlockInstrModeAttr":$tsync_instr_mode)>
+    OpBuilder<(ins "TCoreTypeAttr":$tcore_type, "PipeAttr":$tpipe,
+                   "PipeAttr":$pipe, "OpFoldResult":$flag_id,
+                   "SyncBlockInstrModeAttr":$tsync_instr_mode)>,
+    OpBuilder<(ins "Value":$mutex, "TCoreTypeAttr":$tcore_type,
+                   "PipeAttr":$tpipe, "PipeAttr":$pipe,
+                   "OpFoldResult":$flag_id,
+                   "SyncBlockInstrModeAttr":$tsync_instr_mode)>
   ];
   let extraClassDeclaration = [{
     ::mlir::OpFoldResult getFlagId();

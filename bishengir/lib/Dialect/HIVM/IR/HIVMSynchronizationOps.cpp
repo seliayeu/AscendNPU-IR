@@ -287,14 +287,22 @@ void SyncBlockWaitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
 }
 
 void SyncBlockWaitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                           TCoreTypeAttr tcore_type, PipeAttr tpipe,
-                           PipeAttr pipe, OpFoldResult flag_id,
-                           hivm::SyncBlockInstrModeAttr tsync_instr_mode) {
+                            TCoreTypeAttr tcore_type, PipeAttr tpipe,
+                            PipeAttr pipe, OpFoldResult flag_id,
+                            hivm::SyncBlockInstrModeAttr tsync_instr_mode) {
+  build(odsBuilder, odsState, Value{}, tcore_type, tpipe, pipe, flag_id,
+        tsync_instr_mode);
+}
+
+void SyncBlockWaitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                            Value mutex, TCoreTypeAttr tcore_type,
+                            PipeAttr tpipe, PipeAttr pipe, OpFoldResult flag_id,
+                            hivm::SyncBlockInstrModeAttr tsync_instr_mode) {
   if (auto attr = dyn_cast_if_present<Attribute>(flag_id)) {
-    build(odsBuilder, odsState, tcore_type, tpipe, pipe,
+    build(odsBuilder, odsState, mutex, tcore_type, tpipe, pipe,
           cast<IntegerAttr>(attr), nullptr, tsync_instr_mode);
   } else {
-    build(odsBuilder, odsState, tcore_type, tpipe, pipe, nullptr,
+    build(odsBuilder, odsState, mutex, tcore_type, tpipe, pipe, nullptr,
           cast<Value>(flag_id), tsync_instr_mode);
   }
 }

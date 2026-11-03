@@ -514,14 +514,17 @@ bool isWorkSpaceFuncArgument(func::FuncOp funcOp, BlockArgument funcArg) {
 llvm::SmallVector<int64_t> getAddresses(const llvm::SmallVector<Value> &addrs) {
   llvm::SmallVector<int64_t> offsets;
   for (auto addr : addrs) {
-    if (auto constOp = dyn_cast<arith::ConstantOp>(addr.getDefiningOp())) {
-      auto baseAddr =
-          static_cast<int64_t>(cast<IntegerAttr>(constOp.getValue()).getInt());
-      int64_t baseAddrInBits = baseAddr * utils::kBitsToByte;
-      offsets.push_back(baseAddrInBits);
-    } else {
-      offsets.push_back(ShapedType::kDynamic);
+    Operation *definingOp = addr.getDefiningOp();
+    if (definingOp) {
+      if (auto constOp = dyn_cast<arith::ConstantOp>(definingOp)) {
+        auto baseAddr = static_cast<int64_t>(
+            cast<IntegerAttr>(constOp.getValue()).getInt());
+        int64_t baseAddrInBits = baseAddr * utils::kBitsToByte;
+        offsets.push_back(baseAddrInBits);
+        continue;
+      }
     }
+    offsets.push_back(ShapedType::kDynamic);
   }
   return offsets;
 }
